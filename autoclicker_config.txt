@@ -1,6 +1,6 @@
-Window=Better Minecraft [FORGE] 1.20.1
-Button=Direito
-Interval=100
+Window=Picture-in-picture
+Button=Esquerdo
+Interval=1000
 OnlyWhenOpen=True
 AutoEscape=True
 UseCustomPosition=False

@@ -32,6 +32,14 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# Copiar ícone (necessário para o aplicativo funcionar)
+Write-Host "🎨 Copiando ícone..." -ForegroundColor Yellow
+if (Test-Path "MineCraft.ico") {
+    copy MineCraft.ico release\
+} else {
+    Write-Host "⚠️ Arquivo MineCraft.ico não encontrado!" -ForegroundColor Yellow
+}
+
 # Criar arquivo de configuração padrão
 Write-Host "📝 Criando arquivos de configuração..." -ForegroundColor Yellow
 @"

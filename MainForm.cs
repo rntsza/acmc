@@ -70,6 +70,28 @@ namespace AutoClickerMC
             RefreshWindows();
             LoadSettings();
             RegisterHotKeys();
+            
+            // Definir ícone do formulário
+            try
+            {
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "MineCraft.ico");
+                if (File.Exists(iconPath))
+                {
+                    this.Icon = new Icon(iconPath);
+                }
+                else
+                {
+                    // Tentar no diretório atual
+                    if (File.Exists("MineCraft.ico"))
+                    {
+                        this.Icon = new Icon("MineCraft.ico");
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Se não conseguir carregar o ícone, continua sem ele
+            }
         }
 
         private void CreateInterface()
