@@ -18,7 +18,7 @@ Um autoclicker desenvolvido em C# Windows Forms especificamente para Minecraft, 
 
 ### 📥 Download Rápido (Recomendado)
 1. **Baixe o executável**:
-   - Vá para a seção [Releases](https://github.com/rntsza/autoclicker-minecraft/releases)
+   - Vá para a seção [Releases](https://github.com/rntsza/acmc/releases)
    - Baixe o arquivo `AutoClickerMC.zip`
    - Extraia e execute `AutoClickerMC.exe`
 
@@ -27,8 +27,8 @@ Se você quiser modificar o código ou compilar você mesmo:
 
 1. **Clone o repositório**:
    ```bash
-   git clone https://github.com/rntsza/autoclicker-minecraft.git
-   cd autoclicker-minecraft
+   git clone https://github.com/rntsza/acmc.git
+   cd acmc
    ```
 
 2. **Compile o projeto**:
@@ -64,7 +64,7 @@ Se você quiser modificar o código ou compilar você mesmo:
 ## 📦 Releases
 
 ### Versão Atual: v1.0.0
-- **Download**: [AutoClickerMC.zip](https://github.com/rntsza/autoclicker-minecraft/releases/latest)
+- **Download**: [AutoClickerMC.zip](https://github.com/rntsza/acmc/releases/latest)
 - **Tamanho**: ~2MB
 - **Requisitos**: Windows 10/11, .NET 8.0 Runtime
 
