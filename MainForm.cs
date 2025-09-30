@@ -1,0 +1,377 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+using System.Windows.Forms;
+
+namespace AutoClickerMC
+{
+    public partial class MainForm : Form
+    {
+        private ComboBox windowCombo;
+        private ComboBox buttonCombo;
+        private TextBox intervalBox;
+        private CheckBox onlyWhenOpenCheck;
+        private Button refreshBtn;
+        private Button startBtn;
+        private Button stopBtn;
+        private System.Windows.Forms.Timer? clickTimer;
+        private Dictionary<string, IntPtr> windowHandles = new Dictionary<string, IntPtr>();
+        private bool isClicking = false;
+        private Point clickPosition = new Point(0, 0);
+        private bool useCustomPosition = false;
+
+        const uint WM_LBUTTONDOWN = 0x0201;
+        const uint WM_LBUTTONUP = 0x0202;
+        const uint WM_RBUTTONDOWN = 0x0204;
+        const uint WM_RBUTTONUP = 0x0205;
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+        delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+        [DllImport("user32.dll")] static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+        [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+        [DllImport("user32.dll")] static extern IntPtr PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+        [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        [DllImport("user32.dll")] static extern IntPtr GetCursorPos(out Point lpPoint);
+        [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
+        [DllImport("user32.dll")] static extern IntPtr ScreenToClient(IntPtr hWnd, ref Point lpPoint);
+
+        public MainForm()
+        {
+            InitializeComponent();
+            RefreshWindows();
+            RegisterHotKeys();
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_HOTKEY = 0x0312;
+            if (m.Msg == WM_HOTKEY)
+            {
+                switch (m.WParam.ToInt32())
+                {
+                    case 1: // F9 - Iniciar/Parar
+                        if (isClicking)
+                            StopBtn_Click(this, EventArgs.Empty);
+                        else
+                            StartBtn_Click(this, EventArgs.Empty);
+                        break;
+                    case 2: // F10 - Definir posição
+                        SetClickPosition();
+                        break;
+                }
+            }
+            base.WndProc(ref m);
+        }
+
+        private void RegisterHotKeys()
+        {
+            RegisterHotKey(this.Handle, 1, 0, 0x78); // F9
+            RegisterHotKey(this.Handle, 2, 0, 0x79); // F10
+        }
+
+        private void SetClickPosition()
+        {
+            GetCursorPos(out Point cursorPos);
+            IntPtr windowAtCursor = WindowFromPoint(cursorPos);
+            
+            if (windowCombo.SelectedItem != null && 
+                windowHandles.TryGetValue(windowCombo.SelectedItem.ToString(), out var targetWindow))
+            {
+                if (windowAtCursor == targetWindow)
+                {
+                    Point clientPos = cursorPos;
+                    ScreenToClient(targetWindow, ref clientPos);
+                    clickPosition = clientPos;
+                    useCustomPosition = true;
+                    MessageBox.Show($"Posição definida: {clientPos.X}, {clientPos.Y}", "Posição do Clique", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show("Posicione o cursor sobre a janela selecionada!", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            else
+            {
+                MessageBox.Show("Selecione uma janela primeiro!", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private void InitializeComponent()
+        {
+            this.Text = "AutoClicker Minecraft";
+            this.Size = new Size(500, 300);
+            this.StartPosition = FormStartPosition.CenterScreen;
+            this.FormBorderStyle = FormBorderStyle.FixedSingle;
+            this.MaximizeBox = false;
+
+            // Janela
+            var windowLabel = new Label
+            {
+                Text = "Janela:",
+                Location = new Point(10, 15),
+                Size = new Size(50, 20)
+            };
+            this.Controls.Add(windowLabel);
+
+            windowCombo = new ComboBox
+            {
+                Location = new Point(70, 12),
+                Size = new Size(280, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            this.Controls.Add(windowCombo);
+
+            refreshBtn = new Button
+            {
+                Text = "Atualizar",
+                Location = new Point(360, 10),
+                Size = new Size(80, 30)
+            };
+            refreshBtn.Click += RefreshBtn_Click;
+            this.Controls.Add(refreshBtn);
+
+            // Botão
+            var buttonLabel = new Label
+            {
+                Text = "Botão:",
+                Location = new Point(10, 50),
+                Size = new Size(50, 20)
+            };
+            this.Controls.Add(buttonLabel);
+
+            buttonCombo = new ComboBox
+            {
+                Location = new Point(70, 47),
+                Size = new Size(120, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            buttonCombo.Items.AddRange(new[] { "Esquerdo", "Direito" });
+            buttonCombo.SelectedIndex = 0;
+            this.Controls.Add(buttonCombo);
+
+            // Intervalo
+            var intervalLabel = new Label
+            {
+                Text = "Intervalo (ms):",
+                Location = new Point(200, 50),
+                Size = new Size(80, 20)
+            };
+            this.Controls.Add(intervalLabel);
+
+            intervalBox = new TextBox
+            {
+                Text = "1000",
+                Location = new Point(290, 47),
+                Size = new Size(80, 25)
+            };
+            this.Controls.Add(intervalBox);
+
+            // Checkbox
+            onlyWhenOpenCheck = new CheckBox
+            {
+                Text = "Somente quando a janela existir",
+                Location = new Point(10, 85),
+                Size = new Size(250, 20),
+                Checked = true
+            };
+            this.Controls.Add(onlyWhenOpenCheck);
+
+            // Posição do clique
+            var positionLabel = new Label
+            {
+                Text = "Posição do clique:",
+                Location = new Point(10, 120),
+                Size = new Size(120, 20)
+            };
+            this.Controls.Add(positionLabel);
+
+            var positionBtn = new Button
+            {
+                Text = "Definir Posição (F10)",
+                Location = new Point(140, 117),
+                Size = new Size(150, 25)
+            };
+            positionBtn.Click += (s, e) => SetClickPosition();
+            this.Controls.Add(positionBtn);
+
+            var positionInfo = new Label
+            {
+                Text = "Centro da janela",
+                Location = new Point(300, 120),
+                Size = new Size(150, 20),
+                ForeColor = Color.Gray
+            };
+            this.Controls.Add(positionInfo);
+
+            // Teclas de atalho
+            var hotkeyLabel = new Label
+            {
+                Text = "Teclas: F9 = Iniciar/Parar | F10 = Definir posição",
+                Location = new Point(10, 150),
+                Size = new Size(450, 20),
+                ForeColor = Color.Blue,
+                Font = new Font("Arial", 8)
+            };
+            this.Controls.Add(hotkeyLabel);
+
+            // Botões
+            startBtn = new Button
+            {
+                Text = "Iniciar (F9)",
+                Location = new Point(300, 180),
+                Size = new Size(100, 30)
+            };
+            startBtn.Click += StartBtn_Click;
+            this.Controls.Add(startBtn);
+
+            stopBtn = new Button
+            {
+                Text = "Parar (F9)",
+                Location = new Point(410, 180),
+                Size = new Size(80, 30),
+                Enabled = false
+            };
+            stopBtn.Click += StopBtn_Click;
+            this.Controls.Add(stopBtn);
+        }
+
+        private void RefreshWindows()
+        {
+            windowHandles.Clear();
+            windowCombo.Items.Clear();
+
+            int totalWindows = 0;
+            int visibleWindows = 0;
+            int validWindows = 0;
+
+            EnumWindows((h, l) =>
+            {
+                totalWindows++;
+
+                if (!IsWindowVisible(h)) return true;
+                visibleWindows++;
+
+                int len = GetWindowTextLength(h);
+                if (len == 0) return true;
+
+                var sb = new StringBuilder(len + 1);
+                GetWindowText(h, sb, sb.Capacity);
+                var title = sb.ToString();
+
+                if (!string.IsNullOrEmpty(title) && title.Length > 1)
+                {
+                    validWindows++;
+
+                    if (!title.Contains("AutoClicker") &&
+                        !title.Contains("Program Manager") &&
+                        !title.Contains("Desktop") &&
+                        !title.Contains("Taskbar") &&
+                        !title.Contains("Start"))
+                    {
+                        windowCombo.Items.Add(title);
+                        windowHandles[title] = h;
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            this.Text = $"AutoClicker Minecraft - Total: {totalWindows}, Visíveis: {visibleWindows}, Válidas: {validWindows}, Lista: {windowCombo.Items.Count}";
+
+            if (windowCombo.Items.Count > 0)
+            {
+                windowCombo.SelectedIndex = 0;
+            }
+        }
+
+        private void RefreshBtn_Click(object sender, EventArgs e)
+        {
+            RefreshWindows();
+        }
+
+        private void StartBtn_Click(object sender, EventArgs e)
+        {
+            if (windowCombo.SelectedItem == null) return;
+            if (!windowHandles.TryGetValue(windowCombo.SelectedItem.ToString(), out var hwnd)) return;
+            if (!int.TryParse(intervalBox.Text, out var interval) || interval < 1) return;
+
+            var right = buttonCombo.SelectedItem.ToString().StartsWith("Direito", StringComparison.OrdinalIgnoreCase);
+
+            clickTimer?.Stop();
+            clickTimer = new System.Windows.Forms.Timer();
+            clickTimer.Interval = interval;
+            clickTimer.Tick += (s, args) =>
+            {
+                if (!IsWindow(hwnd))
+                {
+                    if (onlyWhenOpenCheck.Checked) return;
+                }
+
+                int x, y;
+                if (useCustomPosition)
+                {
+                    x = clickPosition.X;
+                    y = clickPosition.Y;
+                }
+                else
+                {
+                    RECT r;
+                    if (!GetClientRect(hwnd, out r)) return;
+                    x = Math.Max(1, (r.Right - r.Left) / 2);
+                    y = Math.Max(1, (r.Bottom - r.Top) / 2);
+                }
+
+                int lParam = (y << 16) | (x & 0xFFFF);
+
+                uint down = right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN;
+                uint up = right ? WM_RBUTTONUP : WM_LBUTTONUP;
+
+                PostMessage(hwnd, down, IntPtr.Zero, (IntPtr)lParam);
+                PostMessage(hwnd, up, IntPtr.Zero, (IntPtr)lParam);
+            };
+
+            clickTimer.Start();
+            isClicking = true;
+
+            startBtn.Enabled = false;
+            stopBtn.Enabled = true;
+            refreshBtn.Enabled = false;
+            windowCombo.Enabled = false;
+            buttonCombo.Enabled = false;
+            intervalBox.Enabled = false;
+            onlyWhenOpenCheck.Enabled = false;
+        }
+
+        private void StopBtn_Click(object sender, EventArgs e)
+        {
+            clickTimer?.Stop();
+            clickTimer = null;
+            isClicking = false;
+
+            startBtn.Enabled = true;
+            stopBtn.Enabled = false;
+            refreshBtn.Enabled = true;
+            windowCombo.Enabled = true;
+            buttonCombo.Enabled = true;
+            intervalBox.Enabled = true;
+            onlyWhenOpenCheck.Enabled = true;
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            UnregisterHotKey(this.Handle, 1);
+            UnregisterHotKey(this.Handle, 2);
+            base.OnFormClosed(e);
+        }
+    }
+}
