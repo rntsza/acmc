@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -10,23 +11,30 @@ namespace AutoClickerMC
 {
     public partial class MainForm : Form
     {
-        private ComboBox windowCombo;
-        private ComboBox buttonCombo;
-        private TextBox intervalBox;
-        private CheckBox onlyWhenOpenCheck;
-        private Button refreshBtn;
-        private Button startBtn;
-        private Button stopBtn;
+        private ComboBox windowCombo = null!;
+        private ComboBox buttonCombo = null!;
+        private TextBox intervalBox = null!;
+        private CheckBox onlyWhenOpenCheck = null!;
+        private Button refreshBtn = null!;
+        private Button startBtn = null!;
+        private Button stopBtn = null!;
         private System.Windows.Forms.Timer? clickTimer;
+        private System.Windows.Forms.Timer? escapeTimer;
         private Dictionary<string, IntPtr> windowHandles = new Dictionary<string, IntPtr>();
         private bool isClicking = false;
         private Point clickPosition = new Point(0, 0);
         private bool useCustomPosition = false;
+        private bool autoEscape = true;
+        private IntPtr targetWindow = IntPtr.Zero;
+        private string configFile = "autoclicker_config.txt";
 
         const uint WM_LBUTTONDOWN = 0x0201;
         const uint WM_LBUTTONUP = 0x0202;
         const uint WM_RBUTTONDOWN = 0x0204;
         const uint WM_RBUTTONUP = 0x0205;
+        const uint WM_KEYDOWN = 0x0100;
+        const uint WM_KEYUP = 0x0101;
+        const uint VK_ESCAPE = 0x1B; // Tecla ESC
 
         [StructLayout(LayoutKind.Sequential)]
         struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
@@ -45,12 +53,186 @@ namespace AutoClickerMC
         [DllImport("user32.dll")] static extern IntPtr GetCursorPos(out Point lpPoint);
         [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
         [DllImport("user32.dll")] static extern IntPtr ScreenToClient(IntPtr hWnd, ref Point lpPoint);
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")] static extern IntPtr SetActiveWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+        [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
         public MainForm()
         {
             InitializeComponent();
+            CreateInterface();
             RefreshWindows();
+            LoadSettings();
             RegisterHotKeys();
+        }
+
+        private void CreateInterface()
+        {
+            // Janela
+            var windowLabel = new Label
+            {
+                Text = "Janela:",
+                Location = new Point(10, 15),
+                Size = new Size(50, 20)
+            };
+            this.Controls.Add(windowLabel);
+
+            windowCombo = new ComboBox
+            {
+                Location = new Point(70, 12),
+                Size = new Size(280, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            windowCombo.SelectedIndexChanged += (s, e) => SaveSettings();
+            this.Controls.Add(windowCombo);
+
+            refreshBtn = new Button
+            {
+                Text = "Atualizar",
+                Location = new Point(360, 10),
+                Size = new Size(80, 30)
+            };
+            refreshBtn.Click += RefreshBtn_Click;
+            this.Controls.Add(refreshBtn);
+
+            // Botão
+            var buttonLabel = new Label
+            {
+                Text = "Botão:",
+                Location = new Point(10, 50),
+                Size = new Size(50, 20)
+            };
+            this.Controls.Add(buttonLabel);
+
+            buttonCombo = new ComboBox
+            {
+                Location = new Point(70, 47),
+                Size = new Size(120, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            buttonCombo.Items.AddRange(new[] { "Esquerdo", "Direito" });
+            buttonCombo.SelectedIndex = 0;
+            buttonCombo.SelectedIndexChanged += (s, e) => SaveSettings();
+            this.Controls.Add(buttonCombo);
+
+            // Intervalo
+            var intervalLabel = new Label
+            {
+                Text = "Intervalo (ms):",
+                Location = new Point(200, 50),
+                Size = new Size(80, 20)
+            };
+            this.Controls.Add(intervalLabel);
+
+            intervalBox = new TextBox
+            {
+                Text = "1000",
+                Location = new Point(290, 47),
+                Size = new Size(80, 25)
+            };
+            intervalBox.TextChanged += (s, e) => SaveSettings();
+            this.Controls.Add(intervalBox);
+
+            // Checkbox
+            onlyWhenOpenCheck = new CheckBox
+            {
+                Text = "Somente quando a janela existir",
+                Location = new Point(10, 85),
+                Size = new Size(250, 20),
+                Checked = true
+            };
+            onlyWhenOpenCheck.CheckedChanged += (s, e) => SaveSettings();
+            this.Controls.Add(onlyWhenOpenCheck);
+
+            // Checkbox para ESC automático
+            var autoEscapeCheck = new CheckBox
+            {
+                Text = "ESC automático quando o jogo pausar",
+                Location = new Point(10, 105),
+                Size = new Size(300, 20),
+                Checked = true
+            };
+            autoEscapeCheck.CheckedChanged += (s, e) => 
+            {
+                autoEscape = autoEscapeCheck.Checked;
+                SaveSettings();
+            };
+            this.Controls.Add(autoEscapeCheck);
+
+            // Instrução sobre F3+P
+            var instructionLabel = new Label
+            {
+                Text = "💡 DICA: Pressione F3+P no Minecraft para desabilitar o pause automático!",
+                Location = new Point(10, 130),
+                Size = new Size(400, 20),
+                ForeColor = Color.DarkGreen,
+                Font = new Font("Arial", 9, FontStyle.Bold)
+            };
+            this.Controls.Add(instructionLabel);
+
+            // Posição do clique
+            var positionLabel = new Label
+            {
+                Text = "Posição do clique:",
+                Location = new Point(10, 155),
+                Size = new Size(120, 20)
+            };
+            this.Controls.Add(positionLabel);
+
+            var positionBtn = new Button
+            {
+                Text = "Definir Posição (F10)",
+                Location = new Point(140, 152),
+                Size = new Size(150, 25)
+            };
+            positionBtn.Click += (s, e) => SetClickPosition();
+            this.Controls.Add(positionBtn);
+
+            var positionInfo = new Label
+            {
+                Text = "Centro da janela",
+                Location = new Point(300, 155),
+                Size = new Size(150, 20),
+                ForeColor = Color.Gray
+            };
+            this.Controls.Add(positionInfo);
+
+            // Teclas de atalho
+            var hotkeyLabel = new Label
+            {
+                Text = "Teclas: F9 = Iniciar/Parar | F10 = Definir posição",
+                Location = new Point(10, 180),
+                Size = new Size(450, 20),
+                ForeColor = Color.Blue,
+                Font = new Font("Arial", 8)
+            };
+            this.Controls.Add(hotkeyLabel);
+
+            // Botões
+            startBtn = new Button
+            {
+                Text = "Iniciar (F9)",
+                Location = new Point(300, 200),
+                Size = new Size(100, 30)
+            };
+            startBtn.Click += StartBtn_Click;
+            this.Controls.Add(startBtn);
+
+            stopBtn = new Button
+            {
+                Text = "Parar (F9)",
+                Location = new Point(410, 200),
+                Size = new Size(80, 30),
+                Enabled = false
+            };
+            stopBtn.Click += StopBtn_Click;
+            this.Controls.Add(stopBtn);
         }
 
         protected override void WndProc(ref Message m)
@@ -86,7 +268,7 @@ namespace AutoClickerMC
             IntPtr windowAtCursor = WindowFromPoint(cursorPos);
             
             if (windowCombo.SelectedItem != null && 
-                windowHandles.TryGetValue(windowCombo.SelectedItem.ToString(), out var targetWindow))
+                windowHandles.TryGetValue(windowCombo.SelectedItem.ToString() ?? "", out var targetWindow))
             {
                 if (windowAtCursor == targetWindow)
                 {
@@ -107,144 +289,6 @@ namespace AutoClickerMC
             }
         }
 
-        private void InitializeComponent()
-        {
-            this.Text = "AutoClicker Minecraft";
-            this.Size = new Size(500, 300);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
-            this.MaximizeBox = false;
-
-            // Janela
-            var windowLabel = new Label
-            {
-                Text = "Janela:",
-                Location = new Point(10, 15),
-                Size = new Size(50, 20)
-            };
-            this.Controls.Add(windowLabel);
-
-            windowCombo = new ComboBox
-            {
-                Location = new Point(70, 12),
-                Size = new Size(280, 25),
-                DropDownStyle = ComboBoxStyle.DropDownList
-            };
-            this.Controls.Add(windowCombo);
-
-            refreshBtn = new Button
-            {
-                Text = "Atualizar",
-                Location = new Point(360, 10),
-                Size = new Size(80, 30)
-            };
-            refreshBtn.Click += RefreshBtn_Click;
-            this.Controls.Add(refreshBtn);
-
-            // Botão
-            var buttonLabel = new Label
-            {
-                Text = "Botão:",
-                Location = new Point(10, 50),
-                Size = new Size(50, 20)
-            };
-            this.Controls.Add(buttonLabel);
-
-            buttonCombo = new ComboBox
-            {
-                Location = new Point(70, 47),
-                Size = new Size(120, 25),
-                DropDownStyle = ComboBoxStyle.DropDownList
-            };
-            buttonCombo.Items.AddRange(new[] { "Esquerdo", "Direito" });
-            buttonCombo.SelectedIndex = 0;
-            this.Controls.Add(buttonCombo);
-
-            // Intervalo
-            var intervalLabel = new Label
-            {
-                Text = "Intervalo (ms):",
-                Location = new Point(200, 50),
-                Size = new Size(80, 20)
-            };
-            this.Controls.Add(intervalLabel);
-
-            intervalBox = new TextBox
-            {
-                Text = "1000",
-                Location = new Point(290, 47),
-                Size = new Size(80, 25)
-            };
-            this.Controls.Add(intervalBox);
-
-            // Checkbox
-            onlyWhenOpenCheck = new CheckBox
-            {
-                Text = "Somente quando a janela existir",
-                Location = new Point(10, 85),
-                Size = new Size(250, 20),
-                Checked = true
-            };
-            this.Controls.Add(onlyWhenOpenCheck);
-
-            // Posição do clique
-            var positionLabel = new Label
-            {
-                Text = "Posição do clique:",
-                Location = new Point(10, 120),
-                Size = new Size(120, 20)
-            };
-            this.Controls.Add(positionLabel);
-
-            var positionBtn = new Button
-            {
-                Text = "Definir Posição (F10)",
-                Location = new Point(140, 117),
-                Size = new Size(150, 25)
-            };
-            positionBtn.Click += (s, e) => SetClickPosition();
-            this.Controls.Add(positionBtn);
-
-            var positionInfo = new Label
-            {
-                Text = "Centro da janela",
-                Location = new Point(300, 120),
-                Size = new Size(150, 20),
-                ForeColor = Color.Gray
-            };
-            this.Controls.Add(positionInfo);
-
-            // Teclas de atalho
-            var hotkeyLabel = new Label
-            {
-                Text = "Teclas: F9 = Iniciar/Parar | F10 = Definir posição",
-                Location = new Point(10, 150),
-                Size = new Size(450, 20),
-                ForeColor = Color.Blue,
-                Font = new Font("Arial", 8)
-            };
-            this.Controls.Add(hotkeyLabel);
-
-            // Botões
-            startBtn = new Button
-            {
-                Text = "Iniciar (F9)",
-                Location = new Point(300, 180),
-                Size = new Size(100, 30)
-            };
-            startBtn.Click += StartBtn_Click;
-            this.Controls.Add(startBtn);
-
-            stopBtn = new Button
-            {
-                Text = "Parar (F9)",
-                Location = new Point(410, 180),
-                Size = new Size(80, 30),
-                Enabled = false
-            };
-            stopBtn.Click += StopBtn_Click;
-            this.Controls.Add(stopBtn);
-        }
 
         private void RefreshWindows()
         {
@@ -294,19 +338,128 @@ namespace AutoClickerMC
             }
         }
 
-        private void RefreshBtn_Click(object sender, EventArgs e)
+        private void RefreshBtn_Click(object? sender, EventArgs e)
         {
             RefreshWindows();
         }
 
-        private void StartBtn_Click(object sender, EventArgs e)
+        private void SaveSettings()
+        {
+            try
+            {
+                var lines = new List<string>
+                {
+                    $"Window={windowCombo.SelectedItem?.ToString() ?? ""}",
+                    $"Button={buttonCombo.SelectedItem?.ToString() ?? ""}",
+                    $"Interval={intervalBox.Text}",
+                    $"OnlyWhenOpen={onlyWhenOpenCheck.Checked}",
+                    $"AutoEscape={autoEscape}",
+                    $"UseCustomPosition={useCustomPosition}",
+                    $"ClickPositionX={clickPosition.X}",
+                    $"ClickPositionY={clickPosition.Y}"
+                };
+                File.WriteAllLines(configFile, lines);
+            }
+            catch (Exception)
+            {
+                // Silenciosamente ignora erros de salvamento
+            }
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                if (!File.Exists(configFile)) return;
+
+                var lines = File.ReadAllLines(configFile);
+                foreach (var line in lines)
+                {
+                    var parts = line.Split('=', 2);
+                    if (parts.Length != 2) continue;
+
+                    switch (parts[0])
+                    {
+                        case "Window":
+                            if (!string.IsNullOrEmpty(parts[1]))
+                            {
+                                for (int i = 0; i < windowCombo.Items.Count; i++)
+                                {
+                                    if (windowCombo.Items[i]?.ToString() == parts[1])
+                                    {
+                                        windowCombo.SelectedIndex = i;
+                                        break;
+                                    }
+                                }
+                            }
+                            break;
+                        case "Button":
+                            if (!string.IsNullOrEmpty(parts[1]))
+                            {
+                                for (int i = 0; i < buttonCombo.Items.Count; i++)
+                                {
+                                    if (buttonCombo.Items[i]?.ToString() == parts[1])
+                                    {
+                                        buttonCombo.SelectedIndex = i;
+                                        break;
+                                    }
+                                }
+                            }
+                            break;
+                        case "Interval":
+                            intervalBox.Text = parts[1];
+                            break;
+                        case "OnlyWhenOpen":
+                            onlyWhenOpenCheck.Checked = bool.Parse(parts[1]);
+                            break;
+                        case "AutoEscape":
+                            autoEscape = bool.Parse(parts[1]);
+                            break;
+                        case "UseCustomPosition":
+                            useCustomPosition = bool.Parse(parts[1]);
+                            break;
+                        case "ClickPositionX":
+                            if (int.TryParse(parts[1], out int x))
+                                clickPosition.X = x;
+                            break;
+                        case "ClickPositionY":
+                            if (int.TryParse(parts[1], out int y))
+                                clickPosition.Y = y;
+                            break;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Silenciosamente ignora erros de carregamento
+            }
+        }
+
+        private void StartBtn_Click(object? sender, EventArgs e)
         {
             if (windowCombo.SelectedItem == null) return;
-            if (!windowHandles.TryGetValue(windowCombo.SelectedItem.ToString(), out var hwnd)) return;
+            if (!windowHandles.TryGetValue(windowCombo.SelectedItem?.ToString() ?? "", out var hwnd)) return;
             if (!int.TryParse(intervalBox.Text, out var interval) || interval < 1) return;
 
-            var right = buttonCombo.SelectedItem.ToString().StartsWith("Direito", StringComparison.OrdinalIgnoreCase);
+            targetWindow = hwnd;
+            var right = buttonCombo.SelectedItem?.ToString()?.StartsWith("Direito", StringComparison.OrdinalIgnoreCase) ?? false;
 
+            // Timer para ESC contínuo (mais frequente)
+            escapeTimer?.Stop();
+            if (autoEscape)
+            {
+                escapeTimer = new System.Windows.Forms.Timer();
+                escapeTimer.Interval = 2000; // ESC a cada 2 segundos
+                escapeTimer.Tick += (s, args) =>
+                {
+                    if (!IsWindow(targetWindow)) return;
+                    PostMessage(targetWindow, WM_KEYDOWN, (IntPtr)VK_ESCAPE, IntPtr.Zero);
+                    PostMessage(targetWindow, WM_KEYUP, (IntPtr)VK_ESCAPE, IntPtr.Zero);
+                };
+                escapeTimer.Start();
+            }
+
+            // Timer para cliques
             clickTimer?.Stop();
             clickTimer = new System.Windows.Forms.Timer();
             clickTimer.Interval = interval;
@@ -352,10 +505,12 @@ namespace AutoClickerMC
             onlyWhenOpenCheck.Enabled = false;
         }
 
-        private void StopBtn_Click(object sender, EventArgs e)
+        private void StopBtn_Click(object? sender, EventArgs e)
         {
             clickTimer?.Stop();
             clickTimer = null;
+            escapeTimer?.Stop();
+            escapeTimer = null;
             isClicking = false;
 
             startBtn.Enabled = true;
@@ -369,6 +524,7 @@ namespace AutoClickerMC
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            SaveSettings();
             UnregisterHotKey(this.Handle, 1);
             UnregisterHotKey(this.Handle, 2);
             base.OnFormClosed(e);

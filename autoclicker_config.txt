@@ -1,0 +1,8 @@
+Window=Better Minecraft [FORGE] 1.20.1
+Button=Direito
+Interval=100
+OnlyWhenOpen=True
+AutoEscape=True
+UseCustomPosition=False
+ClickPositionX=0
+ClickPositionY=0
